@@ -1,0 +1,263 @@
+---
+title: "Kaggle's Credit Card Fraud Detection Analysis"
+author: "Ray Pan (yulinp3@illinois.edu)"
+date: "5/4/2021"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: default
+    toc: yes
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center')
+```
+
+```{r, load-packages, include = FALSE}
+# load packages
+library(ggplot2)
+library(reshape2)
+library(caret)
+library(randomForest)
+library(knitr)
+library(tidyverse)
+library(kableExtra)
+```
+
+
+```{r read-full-data, warning = FALSE, message = FALSE}
+# read full data
+cc = data.table::fread("data-raw/creditcard.csv")
+```
+
+
+***
+
+# Abstract
+
+Billions of dollars could be lost due to fraudulent transactions each year, and it's important for credit card companies to protect their customers from being victimized. I, in this analysis, fit 3 different machine learning algorithms to determine whether a transaction is legal by using a subset that makes it less biased. As result, logistic regression is the most accurate with an accuracy of 0.9698. Credit card companies should use caution when doing analysis based on this regression since there's still a small possibility of false prediction.
+
+***
+
+# Introduction
+
+Credit fraud is a common criminal nowadays, everybody who owns a credit card may be at risk of being the victim of credit fraud. It is extremely important for credit card companies to recognize whether a transaction is genuine or fraudulent to protect their customers from being charged for what they did not pay. The dataset contains transactions made by credit cards in September 2013 by European cardholders.
+
+***
+
+# Methods
+
+## Data
+
+Below are total of NA values in each column and percentage of each type of transaction presented in the dataset.
+```{r}
+cc_change<-cc
+cc_change$Class = factor(ifelse(cc_change$Class == 0, "genuine", "fraud"))
+colSums(is.na(cc_change))
+prop.table(table(cc_change$Class))
+```
+
+There's no NA values in the dataset. However, the response variable is very unbalanced. I created a subset named "cc_new" with fraud and genuine split evenly to analysis.
+
+```{r, echo=TRUE}
+set.seed(42)
+fraud=cc_change[which(cc_change$Class=="fraud"),]
+genuine=cc_change[which(cc_change$Class=="genuine"),]
+genuine=genuine[sample(nrow(genuine),500),]
+quantile(genuine$Amount, seq(0, 1, by=.25))
+quantile(fraud$Amount, seq(0, 1, by=.25))
+cc_new<-rbind(fraud, genuine)
+```
+It shows no matter how much money a transaction has, a genuine or fraudulent transaction could always happen.
+
+```{r}
+data_new<-cc_new
+data_new$Night <- as.factor((floor(data_new$Time/60/60)%%24 <= 9)*1)
+Plot <- data_new
+Plot$factClass <- as.factor(data_new$Class)
+Plot <- table(Plot$Night, Plot$factClass)
+Plot <- melt(Plot)
+
+names(Plot) <- c("IsNight", "Fraud", "Percentage")
+Plot$Fraud <-as.factor(Plot$Fraud)
+ggplot(Plot, aes(x=Fraud, y=Percentage, fill=Fraud))+geom_bar(stat="identity")+
+  facet_grid(~IsNight)+
+  ggtitle("Genuine and fraud at day vs at night")+
+  scale_fill_discrete(name="Normal (0) | Fraud (1)")
+```
+We could see from the graph that fraud transactions are more likely to happen at night when comparing to genuine transactions. But fraud transactions, same as genuine transactions, are more likely to happen during the day when comparing to itself. 
+
+
+## Modeling
+
+### Logistic Regression
+
+I first do a test-train split Training (70%) and Testing (30%)
+```{r, echo=TRUE}
+set.seed(100)
+trn_index <- sample(nrow(cc_new), size = 0.7 * nrow(cc_new))
+cc_trn = cc_new[trn_index, ]
+cc_tst = cc_new[-trn_index, ]
+```
+
+Fit a logistic regression and print the confusion matrix to find the accuracy.
+```{r, warning=FALSE}
+log_mod <- glm(Class ~ ., family = "binomial", data = cc_trn)
+fit_log_prob<-predict(log_mod, cc_tst, type='response')
+pred = factor(ifelse(fit_log_prob>0.5, "genuine", "fraud"))
+log_conf <- confusionMatrix(pred, factor(cc_tst$Class))
+log_acc=log_conf$overall[["Accuracy"]]
+log_conf
+```
+
+The accuracy is rather high, so I'm interested in how the full model would perform.
+I did a test-train split Training (70%) and Testing (30%) on the full dataset
+```{r, echo=TRUE}
+set.seed(100)
+cc$Class <- as.numeric(cc$Class)
+train_index <- sample(nrow(cc), size = 0.7 * nrow(cc))
+train <- cc[train_index,]
+test <- cc[-train_index,]
+```
+
+Fit a logistic regression on the full dataset and print the confusion matrix to find the accuracy.
+```{r}
+log_mod_full <- glm(Class ~ ., family = "binomial", data = train)
+fit_log_prob_full<-predict(log_mod_full, test, type='response')
+pred_full = factor(ifelse(fit_log_prob_full>0.5, "1", "0"))
+conf_log <- confusionMatrix(pred_full, factor(test$Class))
+log_acc_full=conf_log$overall[["Accuracy"]]
+conf_log
+```
+
+A logistic regression model achieved a 0.9698 accuracy for the subset model and a 0.9993 accuracy for the full model, with 0.9362 and 0.9997 sensitivity, which is good. However, for the full model, the accuracy might not be so reliable since the dataset is so biased that most of the transactions are labeled as genuine, which may cause the accuracy to be relatively high.
+
+
+### K-Nearest Neighbors
+
+Print the confusion matrix to find the accuracy.
+```{r}
+k_vals = seq(from = 1, to = 90, by = 1)
+est_idx = sample(nrow(cc_trn), size = 0.8 * nrow(cc_trn))
+est = cc_trn[-est_idx, ]
+val = cc_trn[est_idx, ]
+fit_knn_to_est = function(k) {
+  knn3(Class ~ ., data = est, k = k)
+}
+calc_misclass = function(actual, predicted) {
+  mean(actual != predicted)
+}
+knn_mods = lapply(k_vals, fit_knn_to_est)
+knn_preds = lapply(knn_mods, predict, val, type = "class")
+knn_misclass=lapply(knn_preds, calc_misclass, actual=val$Class)
+kval=k_vals[which.min(knn_misclass)]
+
+#Test Accuracy
+mod_knn = knn3(Class ~ ., data = cc_trn, k=kval)
+cv=trainControl(method="cv", number="5")
+pred=predict(mod_knn, cc_tst, type = "class")
+conf_k <- confusionMatrix(pred, factor(cc_tst$Class))
+k_acc=conf_k$overall[["Accuracy"]]
+conf_k
+```
+The results for K-Nearest Neighbors are not very ideal as it only has accuracy of 0.651 with sensitivity of 0.539.
+
+### Random Forest
+
+Fit a random forest model with ntree=2000 (Number of branches will grow after each time split).
+Print the confusion matrix to find the accuracy.
+```{r}
+fit_forest<-randomForest(Class~., data=cc_trn, ntree=2000)
+acc_forest=mean(predict(fit_forest,cc_tst) == cc_tst$Class)
+preds <- predict(fit_forest, cc_tst)
+conf_forest<-confusionMatrix(preds, factor(cc_tst$Class))
+for_acc=conf_forest$overall[["Accuracy"]]
+conf_forest
+```
+The accuracy for this model is 0.9597 with a sensitivity of 0.922.
+
+The cross-validated accuracy is also calculated here
+```{r}
+set.seed(100)
+index_fold = caret::createFolds(cc_trn$Class, k = 5)
+
+calc_rmse_forest_single_fold = function(idx, ntree) {
+  
+  # Split within fold
+  est = cc_trn[-idx, ]
+  val = cc_trn[idx, ]
+  
+  # Fit model
+  forest_mod = randomForest(Class~., data=est,ntree=ntree)
+
+  # Making predictions
+  pred = predict(forest_mod, val, type='class')
+  
+  # Calculating metric (RMSE)
+   1-mean(val$Class != pred)
+}
+fold_rmse = sapply(index_fold, calc_rmse_forest_single_fold, ntree=2000)
+#The cross-validated accuracy.
+cv_forest=mean(fold_rmse)
+paste("Cross-validated accuracy", cv_forest, sep = ":")
+```
+A Random Forest model achieved a 0.9698 accuracy for the subset model, with a 0.9362 sensitivity, which is very good.
+After cross validation, the accuracy is 0.9337
+
+***
+
+# Results
+
+```{r}
+data=data.frame(
+  c(log_acc, log_conf$byClass[["Sensitivity"]]),
+  c(log_acc_full, conf_log$byClass[["Sensitivity"]]),
+  c(k_acc, conf_k$byClass[["Sensitivity"]]),
+  c(for_acc,conf_forest$byClass[["Sensitivity"]]))
+rownames(data)=c("Accuracy", "Sensitivity")
+colnames(data)=c("Logistic", "Logistic full model", "K-Nearest Neighbors", "Random Forest")
+kable(data)%>%
+  kable_styling(full_width = T)
+```
+
+Both the logistic model and random forest regression show reasonable results with relatively high accuracy. The logistic model would be considered the best model here with accuracy around 0.9698 and sensitivity around 0.9362. The K-Nearest model doesn't seem to perform well with accuracy only at 0.651.
+
+***
+
+# Discussion
+
+The logistic model in this analysis is rather reliable in identifying the "true positive" results(credit transaction labeled as fraud). High accuracy is important for credit card companies since they don't want to wrongly report a genuine transaction nor they don't want to let go of any fraudulent transaction to protect their valued customers. Even though there's a difference in the barplot, from the distribution plot and quartile table we could see that a genuine or fraudulent transaction could happen at any time and any amount. Further investigation might be needed when using this model since there's still a small possibility of false prediction and those companies don't want to let go of any fraudulent transactions. 
+
+***
+
+# Appendix
+
+## Data Dictionary
+
+* Time - the seconds elapsed between each transaction and the first transaction in the dataset
+
+* Amount - transaction Amount
+
+* V1-V28 - principal components obtained with PCA. Due to confidentiality issues, original features and more background information about the data cannot be provided.
+
+* Class - transaction type "Genuine" or "Fraud"
+
+## Boxplot of Amount vs. Class
+```{r}
+ggplot(cc_new, aes(x = Class, y = Amount)) + geom_boxplot() + 
+labs(x = 'Class', y = 'Amount') +
+ggtitle("Distribution of transaction amount by class")
+```
+
+## Distribution of time of transaction
+```{r}
+ggplot(cc_new, aes(x = Time, fill = factor(Class))) + geom_histogram(bins = 100)+
+  labs(x = 'Time since first transaction', y = 'Transactions') +
+  ggtitle('Distribution of time of transaction') +
+  facet_grid(Class ~ ., scales = 'free_y')
+```
+
+
+
+
