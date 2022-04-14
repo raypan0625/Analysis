@@ -5,5 +5,5 @@ is genuine or fraudulent to protect their customers from being charged for what 
 contains transactions made by credit cards in September 2013 by European cardholders.
 
 ## Methods
-Data Cleaning
+Data Cleaning 
 Modeling: Logistic Regression, K-Nearest Neighbors, Random Forest
