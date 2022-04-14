@@ -6,4 +6,5 @@ contains transactions made by credit cards in September 2013 by European cardhol
 
 ## Methods
 Data Cleaning 
+
 Modeling: Logistic Regression, K-Nearest Neighbors, Random Forest
